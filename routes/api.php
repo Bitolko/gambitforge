@@ -127,6 +127,31 @@ function timeControlIncrementMs(string $timeControl): int
     return (int) str($timeControl)->after('+')->toString() * 1000;
 }
 
+function pairingScoreDelta(TournamentPairing $pairing, ?string $result): array
+{
+    return match ($result) {
+        'white_win' => [$pairing->white_user_id => 1.0, $pairing->black_user_id => 0.0],
+        'black_win' => [$pairing->white_user_id => 0.0, $pairing->black_user_id => 1.0],
+        'draw' => [$pairing->white_user_id => 0.5, $pairing->black_user_id => 0.5],
+        'bye' => [$pairing->white_user_id => 1.0],
+        default => [],
+    };
+}
+
+function applyPairingScore(TournamentPairing $pairing, ?string $result, int $direction = 1): void
+{
+    foreach (pairingScoreDelta($pairing, $result) as $userId => $score) {
+        if (! $userId) {
+            continue;
+        }
+
+        TournamentPlayer::query()
+            ->where('tournament_id', $pairing->tournament_id)
+            ->where('user_id', $userId)
+            ->increment('score', $score * $direction);
+    }
+}
+
 Route::middleware('auth:sanctum')->get('/tournaments', function () {
     return Tournament::query()
         ->with(['owner', 'players.user'])
@@ -244,6 +269,32 @@ Route::middleware('auth:sanctum')->post('/tournaments/{tournament}/start', funct
     });
 
     $tournament->update(['status' => 'active']);
+
+    return response()->json(hydratedTournament($tournament));
+});
+
+Route::middleware('auth:sanctum')->post('/tournament-pairings/{pairing}/result', function (Request $request, TournamentPairing $pairing) {
+    $tournament = $pairing->tournament;
+
+    abort_unless($tournament->owner_user_id === $request->user()->id, 403);
+
+    $data = $request->validate([
+        'result' => ['required', 'string', 'in:white_win,black_win,draw,bye'],
+    ]);
+
+    if ($pairing->is_bye && $data['result'] !== 'bye') {
+        return response()->json(['message' => 'Bye pairings can only be marked as bye.'], 422);
+    }
+
+    if (! $pairing->is_bye && $data['result'] === 'bye') {
+        return response()->json(['message' => 'Only bye pairings can receive a bye result.'], 422);
+    }
+
+    applyPairingScore($pairing, $pairing->result, -1);
+
+    $pairing->update(['result' => $data['result']]);
+
+    applyPairingScore($pairing->fresh(), $data['result']);
 
     return response()->json(hydratedTournament($tournament));
 });
