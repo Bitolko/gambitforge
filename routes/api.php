@@ -3,6 +3,8 @@
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Route;
+use App\Events\GameJoined;
+use App\Events\MovePlayed;
 use App\Models\Game;
 use App\Models\Move;
 use App\Models\User;
@@ -73,7 +75,6 @@ Route::middleware('auth:sanctum')->post('/games', function (Request $request) {
     $turn = str_contains($data['fen'], ' w ') ? 'white' : 'black';
 
     $game = Game::create([
-        'user_id' => $request->user()->id,
         'white_user_id' => $request->user()->id,
         'title' => $data['title'] ?? 'Training game',
         'fen' => $data['fen'],
@@ -108,7 +109,11 @@ Route::middleware('auth:sanctum')->post('/games/{game}/join', function (Request 
         'status' => 'active',
     ]);
 
-    return response()->json($game->fresh()->load(['whiteUser', 'blackUser', 'moves']));
+    $freshGame = $game->fresh()->load(['whiteUser', 'blackUser', 'moves']);
+
+    broadcast(new GameJoined($freshGame));
+
+    return response()->json($freshGame);
 });
 
 Route::middleware('auth:sanctum')->post('/games/{game}/moves', function (Request $request, Game $game) {
@@ -147,8 +152,12 @@ Route::middleware('auth:sanctum')->post('/games/{game}/moves', function (Request
         'turn' => str_contains($data['fen_after'], ' w ') ? 'white' : 'black',
     ]);
 
+    $freshGame = $game->fresh()->load(['whiteUser', 'blackUser', 'moves']);
+
+    broadcast(new MovePlayed($freshGame, $move));
+
     return response()->json([
-        'game' => $game->fresh()->load(['whiteUser', 'blackUser', 'moves']),
+        'game' => $freshGame,
         'move' => $move,
     ], 201);
 });
