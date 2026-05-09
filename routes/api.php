@@ -152,6 +152,98 @@ function applyPairingScore(TournamentPairing $pairing, ?string $result, int $dir
     }
 }
 
+function createTournamentGame(Tournament $tournament, User|int $white, User|int $black, int $roundNumber, int $boardNumber): Game
+{
+    $whiteUserId = $white instanceof User ? $white->id : $white;
+    $blackUserId = $black instanceof User ? $black->id : $black;
+    $baseTimeMs = timeControlBaseMs($tournament->time_control);
+
+    return Game::create([
+        'white_user_id' => $whiteUserId,
+        'black_user_id' => $blackUserId,
+        'title' => "{$tournament->name} - Round {$roundNumber} Board {$boardNumber}",
+        'fen' => initialChessFen(),
+        'status' => 'active',
+        'turn' => 'white',
+        'white_time_ms' => $baseTimeMs,
+        'black_time_ms' => $baseTimeMs,
+        'last_move_at' => now(),
+        'time_control' => $tournament->time_control,
+        'increment_ms' => $tournament->increment_ms,
+    ]);
+}
+
+function previousOpponentPairs(Tournament $tournament): array
+{
+    return $tournament->pairings()
+        ->where('is_bye', false)
+        ->get()
+        ->mapWithKeys(function (TournamentPairing $pairing) {
+            $ids = [$pairing->white_user_id, $pairing->black_user_id];
+            sort($ids);
+
+            return [implode('-', $ids) => true];
+        })
+        ->all();
+}
+
+function playerPairKey(TournamentPlayer $a, TournamentPlayer $b): string
+{
+    $ids = [$a->user_id, $b->user_id];
+    sort($ids);
+
+    return implode('-', $ids);
+}
+
+function selectByePlayer($players): ?TournamentPlayer
+{
+    if ($players->count() % 2 === 0) {
+        return null;
+    }
+
+    return $players
+        ->filter(fn (TournamentPlayer $player) => $player->byes === 0)
+        ->sortBy([
+            ['score', 'asc'],
+            ['created_at', 'asc'],
+        ])
+        ->first()
+        ?? $players->sortBy([['score', 'asc'], ['created_at', 'asc']])->first();
+}
+
+function pairPlayersByScore($players, array $previousPairs): array
+{
+    $pool = $players->sortByDesc('score')->values();
+    $pairs = [];
+
+    while ($pool->count() >= 2) {
+        $player = $pool->shift();
+        $opponentIndex = $pool->search(
+            fn (TournamentPlayer $candidate) => ! isset($previousPairs[playerPairKey($player, $candidate)])
+        );
+
+        if ($opponentIndex === false) {
+            $opponentIndex = 0;
+        }
+
+        $opponent = $pool->splice($opponentIndex, 1)->first();
+        $pairs[] = [$player, $opponent];
+    }
+
+    return $pairs;
+}
+
+function currentRoundHasUnfinishedPairings(Tournament $tournament): bool
+{
+    $currentRound = $tournament->rounds()->with('pairings')->latest('round_number')->first();
+
+    if (! $currentRound) {
+        return false;
+    }
+
+    return $currentRound->pairings->contains(fn (TournamentPairing $pairing) => ! $pairing->result);
+}
+
 Route::middleware('auth:sanctum')->get('/tournaments', function () {
     return Tournament::query()
         ->with(['owner', 'players.user'])
@@ -221,7 +313,6 @@ Route::middleware('auth:sanctum')->post('/tournaments/{tournament}/start', funct
         'status' => 'active',
     ]);
 
-    $baseTimeMs = timeControlBaseMs($tournament->time_control);
     $boardNumber = 1;
 
     if ($players->count() % 2 === 1) {
@@ -238,24 +329,12 @@ Route::middleware('auth:sanctum')->post('/tournaments/{tournament}/start', funct
         ]);
     }
 
-    $players->chunk(2)->each(function ($pair) use ($tournament, $round, $baseTimeMs, &$boardNumber) {
+    $players->chunk(2)->each(function ($pair) use ($tournament, $round, &$boardNumber) {
         $pair = $pair->values();
         $white = $pair[0];
         $black = $pair[1];
 
-        $game = Game::create([
-            'white_user_id' => $white->user_id,
-            'black_user_id' => $black->user_id,
-            'title' => "{$tournament->name} - Round 1 Board {$boardNumber}",
-            'fen' => initialChessFen(),
-            'status' => 'active',
-            'turn' => 'white',
-            'white_time_ms' => $baseTimeMs,
-            'black_time_ms' => $baseTimeMs,
-            'last_move_at' => now(),
-            'time_control' => $tournament->time_control,
-            'increment_ms' => $tournament->increment_ms,
-        ]);
+        $game = createTournamentGame($tournament, $white->user_id, $black->user_id, 1, $boardNumber);
 
         TournamentPairing::create([
             'tournament_id' => $tournament->id,
@@ -269,6 +348,61 @@ Route::middleware('auth:sanctum')->post('/tournaments/{tournament}/start', funct
     });
 
     $tournament->update(['status' => 'active']);
+
+    return response()->json(hydratedTournament($tournament));
+});
+
+Route::middleware('auth:sanctum')->post('/tournaments/{tournament}/rounds/next', function (Request $request, Tournament $tournament) {
+    abort_unless($tournament->owner_user_id === $request->user()->id, 403);
+
+    if ($tournament->status !== 'active') {
+        return response()->json(['message' => 'Only active tournaments can generate another round.'], 422);
+    }
+
+    if (currentRoundHasUnfinishedPairings($tournament)) {
+        return response()->json(['message' => 'Finish all current round pairings before generating the next round.'], 422);
+    }
+
+    $roundNumber = ($tournament->rounds()->max('round_number') ?? 0) + 1;
+    $round = TournamentRound::create([
+        'tournament_id' => $tournament->id,
+        'round_number' => $roundNumber,
+        'status' => 'active',
+    ]);
+
+    $players = $tournament->players()->with('user')->get();
+    $byePlayer = selectByePlayer($players);
+
+    if ($byePlayer) {
+        $players = $players->reject(fn (TournamentPlayer $player) => $player->id === $byePlayer->id)->values();
+        $byePlayer->increment('byes');
+        $byePlayer->increment('score', 1);
+
+        TournamentPairing::create([
+            'tournament_id' => $tournament->id,
+            'tournament_round_id' => $round->id,
+            'white_user_id' => $byePlayer->user_id,
+            'is_bye' => true,
+            'result' => 'bye',
+        ]);
+    }
+
+    $previousPairs = previousOpponentPairs($tournament);
+    $boardNumber = 1;
+
+    foreach (pairPlayersByScore($players, $previousPairs) as [$white, $black]) {
+        $game = createTournamentGame($tournament, $white->user_id, $black->user_id, $roundNumber, $boardNumber);
+
+        TournamentPairing::create([
+            'tournament_id' => $tournament->id,
+            'tournament_round_id' => $round->id,
+            'white_user_id' => $white->user_id,
+            'black_user_id' => $black->user_id,
+            'game_id' => $game->id,
+        ]);
+
+        $boardNumber++;
+    }
 
     return response()->json(hydratedTournament($tournament));
 });
