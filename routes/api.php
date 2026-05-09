@@ -9,6 +9,10 @@ use App\Events\GameJoined;
 use App\Events\MovePlayed;
 use App\Models\Game;
 use App\Models\Move;
+use App\Models\Tournament;
+use App\Models\TournamentPairing;
+use App\Models\TournamentPlayer;
+use App\Models\TournamentRound;
 use App\Models\User;
 
 Route::post('/register', function (Request $request) {
@@ -94,6 +98,155 @@ function broadcastSafely(object $event): void
         ]);
     }
 }
+
+function hydratedTournament(Tournament $tournament): Tournament
+{
+    return $tournament->fresh()->load([
+        'owner',
+        'players.user',
+        'rounds.pairings.whiteUser',
+        'rounds.pairings.blackUser',
+        'rounds.pairings.game',
+    ]);
+}
+
+function initialChessFen(): string
+{
+    return 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+}
+
+function timeControlBaseMs(string $timeControl): int
+{
+    $minutes = (int) str($timeControl)->before('+')->toString();
+
+    return max(1, $minutes) * 60 * 1000;
+}
+
+function timeControlIncrementMs(string $timeControl): int
+{
+    return (int) str($timeControl)->after('+')->toString() * 1000;
+}
+
+Route::middleware('auth:sanctum')->get('/tournaments', function () {
+    return Tournament::query()
+        ->with(['owner', 'players.user'])
+        ->withCount('players')
+        ->latest()
+        ->get();
+});
+
+Route::middleware('auth:sanctum')->post('/tournaments', function (Request $request) {
+    $data = $request->validate([
+        'name' => ['required', 'string', 'max:255'],
+        'time_control' => ['nullable', 'string', 'max:20'],
+    ]);
+
+    $timeControl = $data['time_control'] ?? '10+0';
+
+    $tournament = Tournament::create([
+        'owner_user_id' => $request->user()->id,
+        'name' => $data['name'],
+        'status' => 'registration',
+        'time_control' => $timeControl,
+        'increment_ms' => timeControlIncrementMs($timeControl),
+        'rounds_count' => 1,
+    ]);
+
+    TournamentPlayer::create([
+        'tournament_id' => $tournament->id,
+        'user_id' => $request->user()->id,
+    ]);
+
+    return response()->json(hydratedTournament($tournament), 201);
+});
+
+Route::middleware('auth:sanctum')->get('/tournaments/{tournament}', function (Tournament $tournament) {
+    return hydratedTournament($tournament);
+});
+
+Route::middleware('auth:sanctum')->post('/tournaments/{tournament}/join', function (Request $request, Tournament $tournament) {
+    if ($tournament->status !== 'registration') {
+        return response()->json(['message' => 'This tournament is no longer accepting players.'], 422);
+    }
+
+    TournamentPlayer::firstOrCreate([
+        'tournament_id' => $tournament->id,
+        'user_id' => $request->user()->id,
+    ]);
+
+    return response()->json(hydratedTournament($tournament));
+});
+
+Route::middleware('auth:sanctum')->post('/tournaments/{tournament}/start', function (Request $request, Tournament $tournament) {
+    abort_unless($tournament->owner_user_id === $request->user()->id, 403);
+
+    if ($tournament->status !== 'registration') {
+        return response()->json(['message' => 'This tournament has already started.'], 422);
+    }
+
+    $players = $tournament->players()->with('user')->get()->shuffle()->values();
+
+    if ($players->count() < 2) {
+        return response()->json(['message' => 'At least two players are required to start.'], 422);
+    }
+
+    $round = TournamentRound::create([
+        'tournament_id' => $tournament->id,
+        'round_number' => 1,
+        'status' => 'active',
+    ]);
+
+    $baseTimeMs = timeControlBaseMs($tournament->time_control);
+    $boardNumber = 1;
+
+    if ($players->count() % 2 === 1) {
+        $byePlayer = $players->pop();
+        $byePlayer->increment('byes');
+        $byePlayer->increment('score', 1);
+
+        TournamentPairing::create([
+            'tournament_id' => $tournament->id,
+            'tournament_round_id' => $round->id,
+            'white_user_id' => $byePlayer->user_id,
+            'is_bye' => true,
+            'result' => 'bye',
+        ]);
+    }
+
+    $players->chunk(2)->each(function ($pair) use ($tournament, $round, $baseTimeMs, &$boardNumber) {
+        $pair = $pair->values();
+        $white = $pair[0];
+        $black = $pair[1];
+
+        $game = Game::create([
+            'white_user_id' => $white->user_id,
+            'black_user_id' => $black->user_id,
+            'title' => "{$tournament->name} - Round 1 Board {$boardNumber}",
+            'fen' => initialChessFen(),
+            'status' => 'active',
+            'turn' => 'white',
+            'white_time_ms' => $baseTimeMs,
+            'black_time_ms' => $baseTimeMs,
+            'last_move_at' => now(),
+            'time_control' => $tournament->time_control,
+            'increment_ms' => $tournament->increment_ms,
+        ]);
+
+        TournamentPairing::create([
+            'tournament_id' => $tournament->id,
+            'tournament_round_id' => $round->id,
+            'white_user_id' => $white->user_id,
+            'black_user_id' => $black->user_id,
+            'game_id' => $game->id,
+        ]);
+
+        $boardNumber++;
+    });
+
+    $tournament->update(['status' => 'active']);
+
+    return response()->json(hydratedTournament($tournament));
+});
 
 Route::middleware('auth:sanctum')->post('/games', function (Request $request) {
     $data = $request->validate([
