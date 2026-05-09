@@ -244,6 +244,15 @@ function currentRoundHasUnfinishedPairings(Tournament $tournament): bool
     return $currentRound->pairings->contains(fn (TournamentPairing $pairing) => ! $pairing->result);
 }
 
+function markCompletedRounds(Tournament $tournament): void
+{
+    $tournament->rounds()->with('pairings')->get()->each(function (TournamentRound $round) {
+        if ($round->pairings->isNotEmpty() && $round->pairings->every(fn (TournamentPairing $pairing) => $pairing->result)) {
+            $round->update(['status' => 'completed']);
+        }
+    });
+}
+
 Route::middleware('auth:sanctum')->get('/tournaments', function () {
     return Tournament::query()
         ->with(['owner', 'players.user'])
@@ -363,6 +372,8 @@ Route::middleware('auth:sanctum')->post('/tournaments/{tournament}/rounds/next',
         return response()->json(['message' => 'Finish all current round pairings before generating the next round.'], 422);
     }
 
+    markCompletedRounds($tournament);
+
     $roundNumber = ($tournament->rounds()->max('round_number') ?? 0) + 1;
     $round = TournamentRound::create([
         'tournament_id' => $tournament->id,
@@ -407,6 +418,24 @@ Route::middleware('auth:sanctum')->post('/tournaments/{tournament}/rounds/next',
     return response()->json(hydratedTournament($tournament));
 });
 
+Route::middleware('auth:sanctum')->post('/tournaments/{tournament}/finish', function (Request $request, Tournament $tournament) {
+    abort_unless($tournament->owner_user_id === $request->user()->id, 403);
+
+    if ($tournament->status !== 'active') {
+        return response()->json(['message' => 'Only active tournaments can be finished.'], 422);
+    }
+
+    if (currentRoundHasUnfinishedPairings($tournament)) {
+        return response()->json(['message' => 'Finish all current round pairings before finishing the tournament.'], 422);
+    }
+
+    markCompletedRounds($tournament);
+
+    $tournament->update(['status' => 'finished']);
+
+    return response()->json(hydratedTournament($tournament));
+});
+
 Route::middleware('auth:sanctum')->post('/tournament-pairings/{pairing}/result', function (Request $request, TournamentPairing $pairing) {
     $tournament = $pairing->tournament;
 
@@ -429,6 +458,7 @@ Route::middleware('auth:sanctum')->post('/tournament-pairings/{pairing}/result',
     $pairing->update(['result' => $data['result']]);
 
     applyPairingScore($pairing->fresh(), $data['result']);
+    markCompletedRounds($tournament);
 
     return response()->json(hydratedTournament($tournament));
 });
