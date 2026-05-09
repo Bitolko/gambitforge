@@ -95,7 +95,7 @@ http://127.0.0.1:8000/api
 
 ## Reverb WebSockets
 
-Realtime chess updates use Laravel Reverb. Start it in a separate terminal from `gambitforge-api`:
+Realtime chess and tournament updates use Laravel Reverb. Start it in a separate terminal from `gambitforge-api`:
 
 ```bash
 php artisan reverb:start --host=127.0.0.1 --port=8080
@@ -112,6 +112,8 @@ The frontend must have matching Vite Reverb values in `../gambitforge-web/.env`.
 5. Log in as `organizer@gambitforge.test` with `password123`.
 6. Open the seeded `GambitForge Club Night Demo` tournament.
 7. Copy the invite link, review standings, enter results, generate rounds, or finish the event.
+
+Keep two browser sessions open with different demo users to see tournament joins, standings, results, generated rounds, and finished status update without refreshing.
 
 ## Tests
 

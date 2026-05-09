@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Route;
 use App\Events\GameEnded;
 use App\Events\GameJoined;
 use App\Events\MovePlayed;
+use App\Events\TournamentUpdated;
 use App\Models\Game;
 use App\Models\Move;
 use App\Models\Tournament;
@@ -253,6 +254,15 @@ function markCompletedRounds(Tournament $tournament): void
     });
 }
 
+function broadcastTournamentUpdate(Tournament $tournament, string $action): Tournament
+{
+    $freshTournament = hydratedTournament($tournament);
+
+    broadcastSafely(new TournamentUpdated($freshTournament, $action));
+
+    return $freshTournament;
+}
+
 Route::middleware('auth:sanctum')->get('/tournaments', function () {
     return Tournament::query()
         ->with(['owner', 'players.user'])
@@ -300,7 +310,7 @@ Route::middleware('auth:sanctum')->post('/tournaments/{tournament}/join', functi
         'user_id' => $request->user()->id,
     ]);
 
-    return response()->json(hydratedTournament($tournament));
+    return response()->json(broadcastTournamentUpdate($tournament, 'player_joined'));
 });
 
 Route::middleware('auth:sanctum')->post('/tournaments/{tournament}/start', function (Request $request, Tournament $tournament) {
@@ -358,7 +368,7 @@ Route::middleware('auth:sanctum')->post('/tournaments/{tournament}/start', funct
 
     $tournament->update(['status' => 'active']);
 
-    return response()->json(hydratedTournament($tournament));
+    return response()->json(broadcastTournamentUpdate($tournament, 'started'));
 });
 
 Route::middleware('auth:sanctum')->post('/tournaments/{tournament}/rounds/next', function (Request $request, Tournament $tournament) {
@@ -415,7 +425,7 @@ Route::middleware('auth:sanctum')->post('/tournaments/{tournament}/rounds/next',
         $boardNumber++;
     }
 
-    return response()->json(hydratedTournament($tournament));
+    return response()->json(broadcastTournamentUpdate($tournament, 'round_generated'));
 });
 
 Route::middleware('auth:sanctum')->post('/tournaments/{tournament}/finish', function (Request $request, Tournament $tournament) {
@@ -433,7 +443,7 @@ Route::middleware('auth:sanctum')->post('/tournaments/{tournament}/finish', func
 
     $tournament->update(['status' => 'finished']);
 
-    return response()->json(hydratedTournament($tournament));
+    return response()->json(broadcastTournamentUpdate($tournament, 'finished'));
 });
 
 Route::middleware('auth:sanctum')->post('/tournament-pairings/{pairing}/result', function (Request $request, TournamentPairing $pairing) {
@@ -460,7 +470,7 @@ Route::middleware('auth:sanctum')->post('/tournament-pairings/{pairing}/result',
     applyPairingScore($pairing->fresh(), $data['result']);
     markCompletedRounds($tournament);
 
-    return response()->json(hydratedTournament($tournament));
+    return response()->json(broadcastTournamentUpdate($tournament, 'result_updated'));
 });
 
 Route::middleware('auth:sanctum')->post('/games', function (Request $request) {
