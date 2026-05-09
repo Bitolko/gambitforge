@@ -8,10 +8,30 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['white_user_id', 'black_user_id', 'title', 'fen', 'status', 'turn'])]
+#[Fillable([
+    'white_user_id',
+    'black_user_id',
+    'title',
+    'fen',
+    'status',
+    'result',
+    'turn',
+    'white_time_ms',
+    'black_time_ms',
+    'last_move_at',
+    'time_control',
+    'increment_ms',
+])]
 class Game extends Model
 {
     use HasFactory;
+
+    protected function casts(): array
+    {
+        return [
+            'last_move_at' => 'datetime',
+        ];
+    }
 
     public function whiteUser(): BelongsTo
     {
