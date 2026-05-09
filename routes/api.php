@@ -73,6 +73,7 @@ Route::middleware('auth:sanctum')->get('/games', function (Request $request) {
         ->get();
 });
 
+if (! function_exists('hydratedGame')) {
 function hydratedGame(Game $game): Game
 {
     return $game->fresh()->load(['whiteUser', 'blackUser', 'moves']);
@@ -81,6 +82,44 @@ function hydratedGame(Game $game): Game
 function timeoutResult(string $timedOutColor): string
 {
     return $timedOutColor === 'white' ? 'black_wins_timeout' : 'white_wins_timeout';
+}
+
+function activeClockColumn(Game $game): string
+{
+    return $game->turn === 'white' ? 'white_time_ms' : 'black_time_ms';
+}
+
+function elapsedClockMs(Game $game): int
+{
+    if (! $game->last_move_at || $game->status !== 'active') {
+        return 0;
+    }
+
+    return max(0, (int) $game->last_move_at->diffInMilliseconds(now(), true));
+}
+
+function activeClockRemainingMs(Game $game): int
+{
+    return max(0, $game->{activeClockColumn($game)} - elapsedClockMs($game));
+}
+
+function finishGameOnTimeout(Game $game): Game
+{
+    $timedOutColor = $game->turn;
+    $clockColumn = activeClockColumn($game);
+
+    $game->update([
+        $clockColumn => 0,
+        'status' => 'finished',
+        'result' => timeoutResult($timedOutColor),
+        'last_move_at' => null,
+    ]);
+
+    $freshGame = hydratedGame($game);
+
+    broadcastSafely(new GameEnded($freshGame));
+
+    return $freshGame;
 }
 
 function resignationResult(string $resigningColor): string
@@ -261,6 +300,7 @@ function broadcastTournamentUpdate(Tournament $tournament, string $action): Tour
     broadcastSafely(new TournamentUpdated($freshTournament, $action));
 
     return $freshTournament;
+}
 }
 
 Route::middleware('auth:sanctum')->get('/tournaments', function () {
@@ -550,6 +590,20 @@ Route::middleware('auth:sanctum')->post('/games/{game}/resign', function (Reques
     return response()->json($freshGame);
 });
 
+Route::middleware('auth:sanctum')->post('/games/{game}/claim-timeout', function (Request $request, Game $game) {
+    abort_unless($game->hasPlayer($request->user()), 403);
+
+    if ($game->status !== 'active') {
+        return response()->json(['message' => 'Only active games can be flagged on time.'], 422);
+    }
+
+    if (activeClockRemainingMs($game) > 0) {
+        return response()->json(['message' => 'The active player still has time remaining.'], 422);
+    }
+
+    return response()->json(finishGameOnTimeout($game));
+});
+
 Route::middleware('auth:sanctum')->post('/games/{game}/moves', function (Request $request, Game $game) {
     abort_unless($game->hasPlayer($request->user()), 403);
 
@@ -573,23 +627,11 @@ Route::middleware('auth:sanctum')->post('/games/{game}/moves', function (Request
     ]);
 
     $movingColor = $game->turn;
-    $clockColumn = $movingColor === 'white' ? 'white_time_ms' : 'black_time_ms';
-    $elapsedMs = $game->last_move_at
-        ? max(0, now()->diffInMilliseconds($game->last_move_at))
-        : 0;
-    $remainingMs = max(0, $game->{$clockColumn} - $elapsedMs);
+    $clockColumn = activeClockColumn($game);
+    $remainingMs = activeClockRemainingMs($game);
 
     if ($remainingMs <= 0) {
-        $game->update([
-            $clockColumn => 0,
-            'status' => 'finished',
-            'result' => timeoutResult($movingColor),
-            'last_move_at' => null,
-        ]);
-
-        $freshGame = hydratedGame($game);
-
-        broadcastSafely(new GameEnded($freshGame));
+        $freshGame = finishGameOnTimeout($game);
 
         return response()->json([
             'message' => ucfirst($movingColor).' flagged on time.',
