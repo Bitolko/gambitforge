@@ -54,6 +54,16 @@ Route::middleware('auth:sanctum')->post('/logout', function (Request $request) {
     return response()->json(['message' => 'Logged out']);
 });
 
+Route::middleware('auth:sanctum')->get('/games', function (Request $request) {
+    return Game::query()
+        ->with(['whiteUser', 'blackUser'])
+        ->withCount('moves')
+        ->where('white_user_id', $request->user()->id)
+        ->orWhere('black_user_id', $request->user()->id)
+        ->latest()
+        ->get();
+});
+
 Route::middleware('auth:sanctum')->post('/games', function (Request $request) {
     $data = $request->validate([
         'title' => ['nullable', 'string', 'max:255'],
