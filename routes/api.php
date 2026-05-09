@@ -3,6 +3,8 @@
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Route;
+use App\Models\Game;
+use App\Models\Move;
 use App\Models\User;
 
 Route::post('/register', function (Request $request) {
@@ -50,4 +52,62 @@ Route::middleware('auth:sanctum')->post('/logout', function (Request $request) {
     $request->user()->currentAccessToken()->delete();
 
     return response()->json(['message' => 'Logged out']);
+});
+
+Route::middleware('auth:sanctum')->post('/games', function (Request $request) {
+    $data = $request->validate([
+        'title' => ['nullable', 'string', 'max:255'],
+        'fen' => ['required', 'string', 'max:255'],
+    ]);
+
+    $turn = str_contains($data['fen'], ' w ') ? 'white' : 'black';
+
+    $game = Game::create([
+        'user_id' => $request->user()->id,
+        'title' => $data['title'] ?? 'Training game',
+        'fen' => $data['fen'],
+        'turn' => $turn,
+    ]);
+
+    return response()->json($game->load('moves'), 201);
+});
+
+Route::middleware('auth:sanctum')->get('/games/{game}', function (Request $request, Game $game) {
+    abort_unless($game->user_id === $request->user()->id, 403);
+
+    return $game->load('moves');
+});
+
+Route::middleware('auth:sanctum')->post('/games/{game}/moves', function (Request $request, Game $game) {
+    abort_unless($game->user_id === $request->user()->id, 403);
+
+    $data = $request->validate([
+        'from' => ['required', 'string', 'size:2'],
+        'to' => ['required', 'string', 'size:2'],
+        'promotion' => ['nullable', 'string', 'size:1'],
+        'san' => ['required', 'string', 'max:32'],
+        'fen_before' => ['required', 'string', 'max:255'],
+        'fen_after' => ['required', 'string', 'max:255'],
+    ]);
+
+    $move = Move::create([
+        'game_id' => $game->id,
+        'move_number' => $game->moves()->count() + 1,
+        'from' => $data['from'],
+        'to' => $data['to'],
+        'promotion' => $data['promotion'] ?? null,
+        'san' => $data['san'],
+        'fen_before' => $data['fen_before'],
+        'fen_after' => $data['fen_after'],
+    ]);
+
+    $game->update([
+        'fen' => $data['fen_after'],
+        'turn' => str_contains($data['fen_after'], ' w ') ? 'white' : 'black',
+    ]);
+
+    return response()->json([
+        'game' => $game->fresh()->load('moves'),
+        'move' => $move,
+    ], 201);
 });
