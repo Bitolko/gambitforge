@@ -64,22 +64,53 @@ Route::middleware('auth:sanctum')->post('/games', function (Request $request) {
 
     $game = Game::create([
         'user_id' => $request->user()->id,
+        'white_user_id' => $request->user()->id,
         'title' => $data['title'] ?? 'Training game',
         'fen' => $data['fen'],
+        'status' => 'waiting',
         'turn' => $turn,
     ]);
 
-    return response()->json($game->load('moves'), 201);
+    return response()->json($game->load(['whiteUser', 'blackUser', 'moves']), 201);
 });
 
 Route::middleware('auth:sanctum')->get('/games/{game}', function (Request $request, Game $game) {
-    abort_unless($game->user_id === $request->user()->id, 403);
+    abort_unless($game->hasPlayer($request->user()) || $game->status === 'waiting', 403);
 
-    return $game->load('moves');
+    return $game->load(['whiteUser', 'blackUser', 'moves']);
+});
+
+Route::middleware('auth:sanctum')->post('/games/{game}/join', function (Request $request, Game $game) {
+    if ($game->white_user_id === $request->user()->id) {
+        return response()->json(['message' => 'You already created this game as white.'], 422);
+    }
+
+    if ($game->black_user_id) {
+        return response()->json(['message' => 'This game already has both players.'], 422);
+    }
+
+    if ($game->status !== 'waiting') {
+        return response()->json(['message' => 'This game is not accepting players.'], 422);
+    }
+
+    $game->update([
+        'black_user_id' => $request->user()->id,
+        'status' => 'active',
+    ]);
+
+    return response()->json($game->fresh()->load(['whiteUser', 'blackUser', 'moves']));
 });
 
 Route::middleware('auth:sanctum')->post('/games/{game}/moves', function (Request $request, Game $game) {
-    abort_unless($game->user_id === $request->user()->id, 403);
+    abort_unless($game->hasPlayer($request->user()), 403);
+
+    if ($game->status !== 'active') {
+        return response()->json(['message' => 'This game is not active yet.'], 422);
+    }
+
+    if ($game->playerColor($request->user()) !== $game->turn) {
+        return response()->json(['message' => "It is {$game->turn}'s turn."], 403);
+    }
 
     $data = $request->validate([
         'from' => ['required', 'string', 'size:2'],
@@ -107,7 +138,7 @@ Route::middleware('auth:sanctum')->post('/games/{game}/moves', function (Request
     ]);
 
     return response()->json([
-        'game' => $game->fresh()->load('moves'),
+        'game' => $game->fresh()->load(['whiteUser', 'blackUser', 'moves']),
         'move' => $move,
     ], 201);
 });
