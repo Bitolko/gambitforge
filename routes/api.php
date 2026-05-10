@@ -57,6 +57,30 @@ Route::middleware('auth:sanctum')->get('/me', function (Request $request) {
     return $request->user();
 });
 
+Route::middleware(['auth:sanctum', 'admin'])->get('/admin/stats', function () {
+    return response()->json([
+        'stats' => [
+            'total_users' => User::count(),
+            'total_games' => Game::count(),
+            'active_games' => Game::whereIn('status', ['waiting', 'active'])->count(),
+            'total_tournaments' => Tournament::count(),
+            'active_tournaments' => Tournament::whereIn('status', ['registration', 'active'])->count(),
+            'finished_tournaments' => Tournament::where('status', 'finished')->count(),
+        ],
+        'latest_users' => User::query()
+            ->select(['id', 'name', 'email', 'role', 'created_at'])
+            ->latest()
+            ->limit(8)
+            ->get(),
+        'latest_tournaments' => Tournament::query()
+            ->with('owner:id,name,email')
+            ->withCount('players')
+            ->latest()
+            ->limit(8)
+            ->get(),
+    ]);
+});
+
 Route::middleware('auth:sanctum')->post('/logout', function (Request $request) {
     $request->user()->currentAccessToken()->delete();
 

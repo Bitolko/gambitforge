@@ -25,6 +25,7 @@ class DatabaseSeeder extends Seeder
         $initialFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
         $users = collect([
+            ['name' => 'GambitForge Owner', 'email' => 'owner@gambitforge.test', 'role' => 'admin'],
             ['name' => 'Demo Organizer', 'email' => 'organizer@gambitforge.test'],
             ['name' => 'Ana Novak', 'email' => 'ana@gambitforge.test'],
             ['name' => 'Boris Petrov', 'email' => 'boris@gambitforge.test'],
@@ -38,6 +39,8 @@ class DatabaseSeeder extends Seeder
                     'password' => $password,
                 ]
             );
+
+            $user->forceFill(['role' => $demoUser['role'] ?? 'user'])->save();
 
             return [$demoUser['email'] => $user];
         });

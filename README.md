@@ -24,13 +24,29 @@ Useful logins:
 
 ```txt
 organizer@gambitforge.test
+owner@gambitforge.test
 ana@gambitforge.test
 boris@gambitforge.test
 mina@gambitforge.test
 leo@gambitforge.test
 ```
 
+The owner account has platform admin access to `/admin`.
 The organizer account owns the seeded tournament and can start rounds, enter results, generate the next round, and finish the event.
+
+## Admin Access
+
+GambitForge has a minimal owner-only admin role for the `/api/admin/stats` endpoint and frontend `/admin` page.
+
+After creating your owner account, promote it with:
+
+```bash
+php artisan tinker
+```
+
+```php
+\App\Models\User::where('email', 'owner@example.com')->update(['role' => 'admin']);
+```
 
 ## Backend Setup
 
