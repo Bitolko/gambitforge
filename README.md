@@ -87,6 +87,97 @@ Default API URL:
 http://127.0.0.1:8000
 ```
 
+## Production Deployment Notes
+
+These notes are for a future Railway, Render, or VPS deployment of the Laravel API.
+
+Requirements:
+
+- PHP `^8.3` as defined in `composer.json`
+- Composer
+- MySQL-compatible database
+- A web server or process manager that runs Laravel from the `public` directory
+
+Install dependencies:
+
+```bash
+composer install --no-dev --optimize-autoloader
+```
+
+Environment:
+
+```bash
+cp .env.example .env
+php artisan key:generate
+```
+
+Set production values in `.env` on the host. Do not commit the real `.env`.
+
+Important production values:
+
+```env
+APP_ENV=production
+APP_DEBUG=false
+APP_URL=https://your-api-domain.example
+FRONTEND_URL=https://gambitforge.com
+CORS_ALLOWED_ORIGINS=http://localhost:5173,https://gambitforge.com,https://www.gambitforge.com
+BROADCAST_CONNECTION=log
+QUEUE_CONNECTION=sync
+```
+
+Database setup:
+
+```env
+DB_CONNECTION=mysql
+DB_HOST=your-database-host
+DB_PORT=3306
+DB_DATABASE=your-database-name
+DB_USERNAME=your-database-user
+DB_PASSWORD=your-database-password
+```
+
+Run migrations:
+
+```bash
+php artisan migrate --force
+```
+
+Optional seed data for demo/staging environments only:
+
+```bash
+php artisan db:seed --force
+```
+
+Optimize Laravel after environment variables are set:
+
+```bash
+php artisan config:cache
+php artisan route:cache
+php artisan view:cache
+```
+
+Start command examples:
+
+```bash
+php artisan serve --host=0.0.0.0 --port=${PORT:-8000}
+```
+
+For a VPS, prefer Nginx or Apache pointing at `public/` with PHP-FPM instead of `php artisan serve`.
+
+Queue and Reverb notes:
+
+- Initial deployment should keep `BROADCAST_CONNECTION=log` so broadcasts are logged rather than sent over WebSockets.
+- Initial deployment can keep `QUEUE_CONNECTION=sync` for the current API.
+- When enabling background queues later, run a worker such as `php artisan queue:work --tries=3`.
+- When enabling realtime later, set up Reverb credentials, change `BROADCAST_CONNECTION=reverb`, restrict Reverb allowed origins, and run `php artisan reverb:start` as a separate managed process.
+
+Security checklist:
+
+- Keep `APP_DEBUG=false` in production.
+- Generate `APP_KEY` on the server.
+- Store real database, mail, Reverb, and third-party credentials only in the deployment platform environment.
+- Never commit `.env` or secrets.
+
 ## Frontend Setup
 
 From the sibling frontend directory:
