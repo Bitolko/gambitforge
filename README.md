@@ -87,6 +87,20 @@ Default API URL:
 http://127.0.0.1:8000
 ```
 
+Local frontend devsite:
+
+```txt
+http://dev.gambitforge.com:5174
+```
+
+Add this line to your Windows hosts file for the named local devsite:
+
+```txt
+127.0.0.1 dev.gambitforge.com
+```
+
+The API CORS config allows this fixed devsite origin. If you change the frontend host or port, update `CORS_ALLOWED_ORIGINS` in `.env` and run `php artisan config:clear`.
+
 ## Production Deployment Notes
 
 These notes are for a future Railway, Render, or VPS deployment of the Laravel API.
@@ -188,11 +202,13 @@ npm install
 npm run dev
 ```
 
-Default frontend URL:
+Default frontend devsite URL:
 
 ```txt
-http://127.0.0.1:5173
+http://dev.gambitforge.com:5174
 ```
+
+The Vite dev server is pinned to port `5174` with `strictPort: true`, so it will stop with a clear error if the port is already in use instead of drifting to a new port and breaking API CORS.
 
 The Vue API client expects Laravel at:
 
